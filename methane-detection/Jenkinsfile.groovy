@@ -361,7 +361,7 @@ pipeline {
       set -e
       IMG="${REPO_URI}:latest"
 
-      # Use a workspace-backed directory so bind mounts work even if Jenkins runs in a container
+      # Use workspace-backed dir so Docker -v works even if Jenkins runs in a container
       PAYLOAD_DIR="${WORKSPACE}/apprunner_payloads"
       mkdir -p "${PAYLOAD_DIR}"
 
@@ -453,7 +453,6 @@ JSON
 }
 JSON
 
-      # Create or update
       if [ -z "$SVC_ARN" ]; then
         echo "🟢 Creating new App Runner service: ${SERVICE_NAME}"
         docker run --rm -v "${PAYLOAD_DIR}:/payload" \
@@ -470,7 +469,7 @@ JSON
           -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
           -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} \
           ${AWSCLI_IMAGE} apprunner list-services --query "ServiceSummaryList[?ServiceName=='${SERVICE_NAME}'].ServiceArn" --output text)
-      } else {
+      else
         echo "🟡 Updating existing service: ${SERVICE_NAME}"
         docker run --rm -v "${PAYLOAD_DIR}:/payload" \
           -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
@@ -506,6 +505,7 @@ JSON
     '''
   }
 }
+
 
     stage('Optional manual rollout (if AUTO_DEPLOY=false)') {
       when { expression { return params.FORCE_ROLLOUT && !params.AUTO_DEPLOY } }
