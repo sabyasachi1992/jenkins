@@ -26,10 +26,10 @@ pipeline {
     // Build ergonomics
     DOCKER_BUILDKIT = '1'
 
-    // Use a valid AWS CLI image tag
+    // AWS CLI image
     AWSCLI_IMAGE = 'amazon/aws-cli:latest'
-    // If your corp SSL MITM causes issues, you can set a Jenkins "Secret file" credential
-    // for your root CA and map it to AWS_CA_BUNDLE, then uncomment the pass-through lines below.
+
+    // Optional corporate CA bundle (Secret file). If you create it, uncomment this line:
     // AWS_CA_BUNDLE = credentials('AWS_CA_BUNDLE_PEM')
   }
 
@@ -102,13 +102,18 @@ pipeline {
         echo '==================== 🔐 ECR LOGIN =========================='
         sh '''
           set -e
-          # If you have a corp CA bundle, uncomment the env export and the extra -e flag:
-          # export AWS_CA_BUNDLE="${AWS_CA_BUNDLE}"
+          # Build optional CA flag
+          EXTRA_CA=""
+          if [ -n "${AWS_CA_BUNDLE:-}" ]; then
+            EXTRA_CA="-e AWS_CA_BUNDLE=${AWS_CA_BUNDLE}"
+          fi
+
+          # Get ECR password with containerized awscli, then login host docker
           docker run --rm \
             -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
             -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
             -e AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION}" \
-            # -e AWS_CA_BUNDLE="${AWS_CA_BUNDLE}" \
+            $EXTRA_CA \
             ${AWSCLI_IMAGE} ecr get-login-password --region "${AWS_DEFAULT_REGION}" \
           | docker login --username AWS --password-stdin "${REPO_URI}"
         '''
@@ -149,10 +154,17 @@ pipeline {
             echo "APPRUNNER_SERVICE_ARN not configured; skipping manual rollout."
             exit 0
           fi
+
+          EXTRA_CA=""
+          if [ -n "${AWS_CA_BUNDLE:-}" ]; then
+            EXTRA_CA="-e AWS_CA_BUNDLE=${AWS_CA_BUNDLE}"
+          fi
+
           docker run --rm \
             -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
             -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
             -e AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION}" \
+            $EXTRA_CA \
             ${AWSCLI_IMAGE} apprunner start-deployment --service-arn "${APPRUNNER_SERVICE_ARN}"
         '''
       }
