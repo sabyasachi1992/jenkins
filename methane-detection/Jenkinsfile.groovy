@@ -10,7 +10,7 @@ pipeline {
     // -------- App repo (private) --------
     CODE_REPO_URL = 'https://github.com/sabyasachi1992/methane-detection.git'
     CODE_BRANCH   = 'main'
-    APP_DIR       = 'methane-detection'   // we’ll clone here
+    APP_DIR       = 'methane-detection'   // clone target folder
 
     // -------- AWS / ECR --------
     AWS_ACCESS_KEY_ID     = credentials('AWS_ACCESS_KEY_ID')
@@ -20,7 +20,7 @@ pipeline {
     IMAGE_REPO_NAME       = 'methane-tracker'
     REPO_URI              = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}"
 
-    // (Optional) Only needed if you plan to force rollout when App Runner auto-deploy is disabled
+    // Optional: only if you plan to force rollout with auto-deploy disabled
     // APPRUNNER_SERVICE_ARN = credentials('APPRUNNER_SERVICE_ARN')
 
     // Build ergonomics
@@ -29,7 +29,6 @@ pipeline {
 
   options {
     timestamps()
-    // removed ansiColor option to avoid plugin dependency
   }
 
   stages {
@@ -45,8 +44,9 @@ pipeline {
         withCredentials([string(credentialsId: 'GIT_PAT', variable: 'GIT_PAT')]) {
           sh '''
             set -e
+            export GIT_TERMINAL_PROMPT=0
             set +x  # hide PAT in logs
-            git -c http.extraHeader="Authorization: Bearer ${GIT_PAT}" clone --depth 1 --branch "${CODE_BRANCH}" "${CODE_REPO_URL}" "${APP_DIR}"
+            git -c http.sslVerify=false clone --depth 1 --branch "${CODE_BRANCH}" "https://x-access-token:${GIT_PAT}@github.com/sabyasachi1992/methane-detection.git" "${APP_DIR}"
             set -x
             test -f "${APP_DIR}/Dockerfile" || (echo "ERROR: ${APP_DIR}/Dockerfile not found" && exit 1)
           '''
@@ -57,7 +57,6 @@ pipeline {
     stage('Compute image tag') {
       steps {
         script {
-          // short SHA from the app repo; fallback to 'init'
           def sha = sh(script: "cd ${env.APP_DIR} && git rev-parse --short HEAD || echo init", returnStdout: true).trim()
           env.UNIQUE_TAG = params.IMAGE_TAG_OVERRIDE?.trim() ? params.IMAGE_TAG_OVERRIDE.trim() : sha
           echo "Using image tag: ${env.UNIQUE_TAG}"
