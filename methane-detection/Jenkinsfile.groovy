@@ -226,7 +226,7 @@ pipeline {
     IMAGE_REPO_NAME = 'methane-tracker'
     REPO_URI        = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}"
 
-    // ✅ Pin AWS CLI v2 (do NOT use :latest)
+    // ✅ Pin AWS CLI v2 image (ENTRYPOINT is already "aws")
     AWSCLI_IMAGE = 'public.ecr.aws/aws-cli/aws-cli:2.17.60'
 
     // Secrets Manager secret names
@@ -242,7 +242,6 @@ pipeline {
   options { timestamps() }
 
   stages {
-
     stage('Init params') {
       steps {
         script {
@@ -292,11 +291,12 @@ pipeline {
           docker version
           docker pull ${AWSCLI_IMAGE}
           docker run --rm ${AWSCLI_IMAGE} --version
+          # ENTRYPOINT is already "aws", so call subcommands directly (no extra "aws")
           docker run --rm \
             -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
             -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
             -e AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION}" \
-            ${AWSCLI_IMAGE} aws apprunner help >/dev/null
+            ${AWSCLI_IMAGE} apprunner help >/dev/null
         '''
       }
     }
@@ -350,8 +350,8 @@ pipeline {
           docker tag  "${IMAGE_REPO_NAME}:${UNIQUE_TAG}" "${REPO_URI}:${UNIQUE_TAG}"
           docker tag  "${IMAGE_REPO_NAME}:${UNIQUE_TAG}" "${REPO_URI}:latest"
           docker push "${REPO_URI}:${UNIQUE_TAG}"
-          docker push "${REPO_URI}:latest"
-        '''
+          docker push "${REPO_URI}:latest}"
+        '''.stripSuffix("}")
       }
     }
 
@@ -393,7 +393,7 @@ pipeline {
           ADE=true
           [ "${AUTO_DEPLOY}" = "true" ] || ADE=false
 
-          # Write JSON payloads to host /tmp (will mount into container)
+          # Write JSON payloads to host /tmp (mounted into container)
           cat >/tmp/src.json <<JSON
 {
   "ImageRepository": {
@@ -435,7 +435,7 @@ JSON
               -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
               -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
               -e AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION}" \
-              ${AWSCLI_IMAGE} aws apprunner create-service \
+              ${AWSCLI_IMAGE} apprunner create-service \
                 --service-name "${SERVICE_NAME}" \
                 --source-configuration file:///tmp/src.json \
                 --instance-configuration file:///tmp/inst.json
@@ -447,7 +447,7 @@ JSON
               -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
               -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
               -e AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION}" \
-              ${AWSCLI_IMAGE} aws apprunner update-service \
+              ${AWSCLI_IMAGE} apprunner update-service \
                 --service-arn "${SVC_ARN}" \
                 --source-configuration file:///tmp/src.json \
                 --instance-configuration file:///tmp/inst.json
@@ -481,7 +481,7 @@ JSON
             -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \
             -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
             -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} \
-            ${AWSCLI_IMAGE} aws apprunner start-deployment --service-arn "$SVC_ARN"
+            ${AWSCLI_IMAGE} apprunner start-deployment --service-arn "$SVC_ARN"
         '''
       }
     }
