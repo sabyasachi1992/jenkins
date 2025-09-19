@@ -20,11 +20,14 @@ pipeline {
     IMAGE_REPO_NAME       = 'methane-tracker'
     REPO_URI              = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}"
 
-    // Optional: only if you plan to force rollout with auto-deploy disabled
+    // (Optional) Only needed if you plan to force rollout when auto-deploy is disabled
     // APPRUNNER_SERVICE_ARN = credentials('APPRUNNER_SERVICE_ARN')
 
     // Build ergonomics
     DOCKER_BUILDKIT = '1'
+
+    // AWS CLI Docker image
+    AWSCLI_IMAGE = 'amazon/aws-cli:2'
   }
 
   options {
@@ -32,8 +35,10 @@ pipeline {
   }
 
   stages {
+
     stage('Prep workspace') {
       steps {
+        echo '==================== 🧹 PREP WORKSPACE ===================='
         deleteDir()
         sh 'pwd && ls -la'
       }
@@ -41,6 +46,7 @@ pipeline {
 
     stage('Checkout app (private via PAT)') {
       steps {
+        echo '==================== 📥 CHECKOUT APP ======================='
         withCredentials([string(credentialsId: 'GIT_PAT', variable: 'GIT_PAT')]) {
           sh '''
             set -e
@@ -51,11 +57,26 @@ pipeline {
             test -f "${APP_DIR}/Dockerfile" || (echo "ERROR: ${APP_DIR}/Dockerfile not found" && exit 1)
           '''
         }
+        sh 'ls -la "${APP_DIR}"'
+      }
+    }
+
+    stage('Tool check') {
+      steps {
+        echo '==================== 🔧 TOOL CHECK ========================='
+        sh '''
+          set -e
+          echo "[docker] version:"
+          docker version || (echo "Docker missing on agent"; exit 1)
+          echo "[awscli] version (via container):"
+          docker run --rm ${AWSCLI_IMAGE} --version
+        '''
       }
     }
 
     stage('Compute image tag') {
       steps {
+        echo '==================== 🏷️  IMAGE TAG ========================='
         script {
           def sha = sh(script: "cd ${env.APP_DIR} && git rev-parse --short HEAD || echo init", returnStdout: true).trim()
           env.UNIQUE_TAG = params.IMAGE_TAG_OVERRIDE?.trim() ? params.IMAGE_TAG_OVERRIDE.trim() : sha
@@ -64,18 +85,25 @@ pipeline {
       }
     }
 
-    stage('Login to ECR') {
+    stage('Login to ECR (via awscli container)') {
       steps {
+        echo '==================== 🔐 ECR LOGIN =========================='
         sh '''
           set -e
-          aws --version || true
-          aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$REPO_URI"
+          # Get ECR password using the AWS CLI container and pipe into host docker login
+          docker run --rm \
+            -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
+            -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
+            -e AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION}" \
+            ${AWSCLI_IMAGE} ecr get-login-password --region "${AWS_DEFAULT_REGION}" \
+          | docker login --username AWS --password-stdin "${REPO_URI}"
         '''
       }
     }
 
     stage('Build image') {
       steps {
+        echo '==================== 🧱 DOCKER BUILD ======================='
         sh '''
           set -e
           echo "Building ${IMAGE_REPO_NAME}:${UNIQUE_TAG} and :latest from ./${APP_DIR}"
@@ -86,6 +114,7 @@ pipeline {
 
     stage('Tag & push to ECR') {
       steps {
+        echo '==================== 🚀 PUSH TO ECR ========================'
         sh '''
           set -e
           docker tag  "${IMAGE_REPO_NAME}:${UNIQUE_TAG}" "${REPO_URI}:${UNIQUE_TAG}"
@@ -99,14 +128,20 @@ pipeline {
     stage('Force App Runner rollout (optional)') {
       when { expression { return params.FORCE_ROLLOUT } }
       steps {
+        echo '==================== 🔁 APP RUNNER ROLLOUT ================='
         sh '''
           set -e
           if [ -z "${APPRUNNER_SERVICE_ARN:-}" ]; then
             echo "APPRUNNER_SERVICE_ARN not configured; skipping manual rollout."
             exit 0
           fi
-          echo "Triggering App Runner deployment..."
-          aws apprunner start-deployment --service-arn "${APPRUNNER_SERVICE_ARN}"
+
+          # Use awscli container for the rollout too
+          docker run --rm \
+            -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
+            -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
+            -e AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION}" \
+            ${AWSCLI_IMAGE} apprunner start-deployment --service-arn "${APPRUNNER_SERVICE_ARN}"
         '''
       }
     }
@@ -114,14 +149,15 @@ pipeline {
 
   post {
     always {
+      echo '==================== 🧽 CLEANUP ============================'
       sh 'docker image prune -f || true'
     }
     success {
       echo "✅ Built & pushed: ${REPO_URI}:${UNIQUE_TAG} and :latest"
-      echo "If App Runner AutoDeployments is ON, rollout will happen automatically."
+      echo "ℹ️  With App Runner AutoDeployments ON, rollout happens automatically."
     }
     failure {
-      echo "❌ Pipeline failed. Check the stage logs."
+      echo "❌ Pipeline failed. Check stage logs above."
     }
   }
 }
