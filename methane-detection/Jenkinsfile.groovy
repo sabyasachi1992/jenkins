@@ -196,6 +196,9 @@
 //   }
 // }
 
+
+
+
 pipeline {
   agent any
 
@@ -212,12 +215,10 @@ pipeline {
   }
 
   environment {
-    // -------- Repos --------
     CODE_REPO_URL = 'https://github.com/sabyasachi1992/methane-detection.git'
     CODE_BRANCH   = 'main'
     APP_DIR       = 'methane-detection'
 
-    // -------- AWS / ECR --------
     AWS_ACCESS_KEY_ID     = credentials('AWS_ACCESS_KEY_ID')
     AWS_SECRET_ACCESS_KEY = credentials('AWS_SECRET_ACCESS_KEY')
     AWS_DEFAULT_REGION    = credentials('AWS_DEFAULT_REGION')   // e.g., ap-south-1
@@ -225,15 +226,12 @@ pipeline {
     IMAGE_REPO_NAME       = 'methane-tracker'
     REPO_URI              = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}"
 
-    // AWS CLI container
     AWSCLI_IMAGE = 'amazon/aws-cli:latest'
 
-    // Secrets (names in Secrets Manager)
     SECRET_GOOGLE  = 'GOOGLE_CREDENTIALS'
     SECRET_OPENEO  = 'OPENEO_PASSWORD'
     SECRET_COPERNI = 'COPERNICUS_PASSWORD'
 
-    // Roles (names; ARNs resolved at runtime)
     ECR_ROLE_NAME = 'AppRunnerEcrAccessRole'
     RT_ROLE_NAME  = 'AppRunnerRuntimeRole'
   }
@@ -244,17 +242,15 @@ pipeline {
     stage('Init params') {
       steps {
         script {
-          // copy params to env.* so we can safely reference inside sh blocks
-          env.SERVICE_NAME         = params.SERVICE_NAME
-          env.RECREATE_SERVICE     = params.RECREATE_SERVICE.toString()
-          env.AUTO_DEPLOY          = params.AUTO_DEPLOY.toString()
-          env.ENTRY_FILE_PARAM     = params.ENTRY_FILE
-          env.EE_PROJECT_PARAM     = params.EE_PROJECT
-          env.OPENEO_EMAIL_PARAM   = params.OPENEO_EMAIL
-          env.COPERNICUS_USER_PARAM= params.COPERNICUS_USERNAME
-          env.IMAGE_TAG_OVERRIDE_P = params.IMAGE_TAG_OVERRIDE
-          env.FORCE_ROLLOUT_PARAM  = params.FORCE_ROLLOUT.toString()
-          echo "Service to manage: ${env.SERVICE_NAME}"
+          env.SERVICE_NAME          = params.SERVICE_NAME
+          env.RECREATE_SERVICE      = params.RECREATE_SERVICE.toString()
+          env.AUTO_DEPLOY           = params.AUTO_DEPLOY.toString()
+          env.ENTRY_FILE_PARAM      = params.ENTRY_FILE
+          env.EE_PROJECT_PARAM      = params.EE_PROJECT
+          env.OPENEO_EMAIL_PARAM    = params.OPENEO_EMAIL
+          env.COPERNICUS_USER_PARAM = params.COPERNICUS_USERNAME
+          env.IMAGE_TAG_OVERRIDE_P  = params.IMAGE_TAG_OVERRIDE
+          env.FORCE_ROLLOUT_PARAM   = params.FORCE_ROLLOUT.toString()
         }
       }
     }
@@ -355,7 +351,7 @@ pipeline {
         echo '==================== 🧭 APP RUNNER SERVICE ================='
         sh '''
           set -e
-
+          WORKDIR="$PWD"
           IMG="${REPO_URI}:latest"
 
           # Resolve role ARNs
@@ -366,7 +362,7 @@ pipeline {
           echo "ECR role: $ECR_ROLE_ARN"
           echo "RT  role: $RT_ROLE_ARN"
 
-          # Find existing service ARN (if any)
+          # Find existing service ARN
           SVC_ARN=$(docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} apprunner list-services --query "ServiceSummaryList[?ServiceName=='${SERVICE_NAME}'].ServiceArn" --output text || true)
 
           if [ -n "$SVC_ARN" ] && [ "${RECREATE_SERVICE}" = "true" ]; then
@@ -384,36 +380,70 @@ pipeline {
             SVC_ARN=""
           fi
 
+          # Prepare JSON files for source & instance configuration
+          SRC_JSON="$WORKDIR/src.json"
+          INST_JSON="$WORKDIR/inst.json"
+
+          cat > "$SRC_JSON" <<JSON
+{
+  "ImageRepository": {
+    "ImageIdentifier": "${IMG}",
+    "ImageRepositoryType": "ECR",
+    "ImageConfiguration": {
+      "Port": "8080",
+      "RuntimeEnvironmentVariables": [
+        { "Name": "ENTRY_FILE",          "Value": "${ENTRY_FILE_PARAM}" },
+        { "Name": "EE_PROJECT",          "Value": "${EE_PROJECT_PARAM}" },
+        { "Name": "OPENEO_EMAIL",        "Value": "${OPENEO_EMAIL_PARAM}" },
+        { "Name": "COPERNICUS_USERNAME", "Value": "${COPERNICUS_USER_PARAM}" }
+      ],
+      "RuntimeEnvironmentSecrets": [
+        { "Name": "GOOGLE_CREDENTIALS",  "Value": "arn:aws:secretsmanager:${AWS_DEFAULT_REGION}:${AWS_ACCOUNT_ID}:secret:${SECRET_GOOGLE}" },
+        { "Name": "OPENEO_PASSWORD",     "Value": "arn:aws:secretsmanager:${AWS_DEFAULT_REGION}:${AWS_ACCOUNT_ID}:secret:${SECRET_OPENEO}" },
+        { "Name": "COPERNICUS_PASSWORD", "Value": "arn:aws:secretsmanager:${AWS_DEFAULT_REGION}:${AWS_ACCOUNT_ID}:secret:${SECRET_COPERNI}" }
+      ]
+    }
+  },
+  "AuthenticationConfiguration": {
+    "AccessRoleArn": "${ECR_ROLE_ARN}"
+  },
+  "AutoDeploymentsEnabled": ${AUTO_DEPLOY}
+}
+JSON
+
+          cat > "$INST_JSON" <<JSON
+{
+  "Cpu": "1 vCPU",
+  "Memory": "2 GB",
+  "InstanceRoleArn": "${RT_ROLE_ARN}"
+}
+JSON
+
           if [ -z "$SVC_ARN" ]; then
             echo "🟢 Creating new App Runner service: ${SERVICE_NAME}"
             docker run --rm \
               -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \
               -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
               -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} \
+              -v "$WORKDIR":"$WORKDIR" -w "$WORKDIR" \
               ${AWSCLI_IMAGE} apprunner create-service \
               --service-name "${SERVICE_NAME}" \
-              --source-configuration "ImageRepository={ImageIdentifier=${IMG},ImageRepositoryType=ECR,ImageConfiguration={Port=8080,RuntimeEnvironmentVariables=[{Name=ENTRY_FILE,Value=${ENTRY_FILE_PARAM}},{Name=EE_PROJECT,Value=${EE_PROJECT_PARAM}},{Name=OPENEO_EMAIL,Value=${OPENEO_EMAIL_PARAM}},{Name=COPERNICUS_USERNAME,Value=${COPERNICUS_USER_PARAM}}],RuntimeEnvironmentSecrets=[{Name=GOOGLE_CREDENTIALS,Value=arn:aws:secretsmanager:${AWS_DEFAULT_REGION}:${AWS_ACCOUNT_ID}:secret:${SECRET_GOOGLE}},{Name=OPENEO_PASSWORD,Value=arn:aws:secretsmanager:${AWS_DEFAULT_REGION}:${AWS_ACCOUNT_ID}:secret:${SECRET_OPENEO}},{Name=COPERNICUS_PASSWORD,Value=arn:aws:secretsmanager:${AWS_DEFAULT_REGION}:${AWS_ACCOUNT_ID}:secret:${SECRET_COPERNI}}]},AccessRoleArn=$ECR_ROLE_ARN},AutoDeploymentsEnabled=${AUTO_DEPLOY}" \
-              --instance-configuration "Cpu=1 vCPU,Memory=2 GB,InstanceRoleArn=$RT_ROLE_ARN" >/dev/null
+              --source-configuration file://"$SRC_JSON" \
+              --instance-configuration file://"$INST_JSON" >/dev/null
 
-            # capture new ARN
             SVC_ARN=$(docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} apprunner list-services --query "ServiceSummaryList[?ServiceName=='${SERVICE_NAME}'].ServiceArn" --output text)
           else
             echo "🟡 Service exists. Updating image/config..."
-            # toggle auto-deploy flag according to param
-            if [ "${AUTO_DEPLOY}" = "true" ]; then
-              AUTO_FLAG="--auto-deployments-enabled"
-            else
-              AUTO_FLAG="--no-auto-deployments-enabled"
-            fi
-
+            # Toggle auto-deploy flag in source JSON already; use update-service
             docker run --rm \
               -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \
               -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
               -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} \
+              -v "$WORKDIR":"$WORKDIR" -w "$WORKDIR" \
               ${AWSCLI_IMAGE} apprunner update-service \
               --service-arn "$SVC_ARN" \
-              --source-configuration "ImageRepository={ImageRepositoryType=ECR,ImageIdentifier=${IMG},ImageConfiguration={Port=8080,RuntimeEnvironmentVariables=[{Name=ENTRY_FILE,Value=${ENTRY_FILE_PARAM}},{Name=EE_PROJECT,Value=${EE_PROJECT_PARAM}},{Name=OPENEO_EMAIL,Value=${OPENEO_EMAIL_PARAM}},{Name=COPERNICUS_USERNAME,Value=${COPERNICUS_USER_PARAM}}],RuntimeEnvironmentSecrets=[{Name=GOOGLE_CREDENTIALS,Value=arn:aws:secretsmanager:${AWS_DEFAULT_REGION}:${AWS_ACCOUNT_ID}:secret:${SECRET_GOOGLE}},{Name=OPENEO_PASSWORD,Value=arn:aws:secretsmanager:${AWS_DEFAULT_REGION}:${AWS_ACCOUNT_ID}:secret:${SECRET_OPENEO}},{Name=COPERNICUS_PASSWORD,Value=arn:aws:secretsmanager:${AWS_DEFAULT_REGION}:${AWS_ACCOUNT_ID}:secret:${SECRET_COPERNI}}]}" \
-              $AUTO_FLAG >/dev/null
+              --source-configuration file://"$SRC_JSON" \
+              --instance-configuration file://"$INST_JSON" >/dev/null
           fi
 
           echo "⏳ Waiting until service is RUNNING..."
