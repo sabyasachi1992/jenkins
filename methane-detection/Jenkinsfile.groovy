@@ -197,7 +197,6 @@
 // }
 
 
-
 pipeline {
   agent any
 
@@ -226,7 +225,7 @@ pipeline {
     IMAGE_REPO_NAME = 'methane-tracker'
     REPO_URI        = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}"
 
-    // ✅ Pin AWS CLI v2 image (ENTRYPOINT is already "aws")
+    // Pin AWS CLI v2 image (ENTRYPOINT is already "aws")
     AWSCLI_IMAGE = 'public.ecr.aws/aws-cli/aws-cli:2.17.60'
 
     // Secrets Manager secret names
@@ -291,7 +290,7 @@ pipeline {
           docker version
           docker pull ${AWSCLI_IMAGE}
           docker run --rm ${AWSCLI_IMAGE} --version
-          # ENTRYPOINT is already "aws", so call subcommands directly (no extra "aws")
+          # ENTRYPOINT is "aws", so call subcommands directly (no extra "aws")
           docker run --rm \
             -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
             -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
@@ -350,8 +349,8 @@ pipeline {
           docker tag  "${IMAGE_REPO_NAME}:${UNIQUE_TAG}" "${REPO_URI}:${UNIQUE_TAG}"
           docker tag  "${IMAGE_REPO_NAME}:${UNIQUE_TAG}" "${REPO_URI}:latest"
           docker push "${REPO_URI}:${UNIQUE_TAG}"
-          docker push "${REPO_URI}:latest}"
-        '''.stripSuffix("}")
+          docker push "${REPO_URI}:latest"
+        '''
       }
     }
 
@@ -363,25 +362,46 @@ pipeline {
           IMG="${REPO_URI}:latest"
 
           # Resolve role ARNs
-          ECR_ROLE_ARN=$(docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} iam get-role --role-name ${ECR_ROLE_NAME} --query 'Role.Arn' --output text)
-          RT_ROLE_ARN=$( docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} iam get-role --role-name ${RT_ROLE_NAME}  --query 'Role.Arn' --output text)
+          ECR_ROLE_ARN=$(docker run --rm \
+            -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \
+            -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
+            -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} \
+            ${AWSCLI_IMAGE} iam get-role --role-name ${ECR_ROLE_NAME} --query 'Role.Arn' --output text)
+
+          RT_ROLE_ARN=$(docker run --rm \
+            -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \
+            -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
+            -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} \
+            ${AWSCLI_IMAGE} iam get-role --role-name ${RT_ROLE_NAME} --query 'Role.Arn' --output text)
 
           echo "[Roles]"
           echo "ECR role: $ECR_ROLE_ARN"
           echo "RT  role: $RT_ROLE_ARN"
 
           # Existing service?
-          SVC_ARN=$(docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} apprunner list-services --query "ServiceSummaryList[?ServiceName=='${SERVICE_NAME}'].ServiceArn" --output text || true)
+          SVC_ARN=$(docker run --rm \
+            -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \
+            -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
+            -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} \
+            ${AWSCLI_IMAGE} apprunner list-services --query "ServiceSummaryList[?ServiceName=='${SERVICE_NAME}'].ServiceArn" --output text || true)
 
           # Recreate if requested
           if [ -n "$SVC_ARN" ] && [ "${RECREATE_SERVICE}" = "true" ]; then
             echo "🔴 Deleting existing service ${SERVICE_NAME} ($SVC_ARN)"
-            docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} apprunner delete-service --service-arn "$SVC_ARN" >/dev/null
+            docker run --rm \
+              -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \
+              -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
+              -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} \
+              ${AWSCLI_IMAGE} apprunner delete-service --service-arn "$SVC_ARN" >/dev/null
 
             echo "⏳ Waiting for deletion..."
             for i in $(seq 1 60); do
               sleep 10
-              CUR=$(docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} apprunner list-services --query "ServiceSummaryList[?ServiceName=='${SERVICE_NAME}'].ServiceArn" --output text || true)
+              CUR=$(docker run --rm \
+                -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \
+                -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
+                -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} \
+                ${AWSCLI_IMAGE} apprunner list-services --query "ServiceSummaryList[?ServiceName=='${SERVICE_NAME}'].ServiceArn" --output text || true)
               [ -z "$CUR" ] && break
               echo "  still deleting..."
             done
@@ -440,7 +460,11 @@ JSON
                 --source-configuration file:///tmp/src.json \
                 --instance-configuration file:///tmp/inst.json
 
-            SVC_ARN=$(docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} apprunner list-services --query "ServiceSummaryList[?ServiceName=='${SERVICE_NAME}'].ServiceArn" --output text)
+            SVC_ARN=$(docker run --rm \
+              -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \
+              -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
+              -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} \
+              ${AWSCLI_IMAGE} apprunner list-services --query "ServiceSummaryList[?ServiceName=='${SERVICE_NAME}'].ServiceArn" --output text)
           else
             echo "🟡 Updating existing service: ${SERVICE_NAME}"
             docker run --rm -v /tmp:/tmp \
@@ -455,7 +479,11 @@ JSON
 
           echo "⏳ Waiting until service is RUNNING..."
           for i in $(seq 1 60); do
-            STATUS=$(docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} apprunner describe-service --service-arn "$SVC_ARN" --query "Service.Status" --output text || true)
+            STATUS=$(docker run --rm \
+              -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \
+              -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
+              -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} \
+              ${AWSCLI_IMAGE} apprunner describe-service --service-arn "$SVC_ARN" --query "Service.Status" --output text || true)
             echo "  status: $STATUS"
             [ "$STATUS" = "RUNNING" ] && break
             case "$STATUS" in
@@ -464,7 +492,11 @@ JSON
             sleep 10
           done
 
-          URL=$(docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} apprunner describe-service --service-arn "$SVC_ARN" --query "Service.ServiceUrl" --output text || true)
+          URL=$(docker run --rm \
+            -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \
+            -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
+            -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} \
+            ${AWSCLI_IMAGE} apprunner describe-service --service-arn "$SVC_ARN" --query "Service.ServiceUrl" --output text || true)
           echo "✅ Service URL: $URL"
         '''
       }
@@ -476,7 +508,11 @@ JSON
         echo '==================== 🔁 MANUAL ROLLOUT ====================='
         sh '''
           set -e
-          SVC_ARN=$(docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} apprunner list-services --query "ServiceSummaryList[?ServiceName=='${SERVICE_NAME}'].ServiceArn" --output text)
+          SVC_ARN=$(docker run --rm \
+            -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \
+            -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
+            -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} \
+            ${AWSCLI_IMAGE} apprunner list-services --query "ServiceSummaryList[?ServiceName=='${SERVICE_NAME}'].ServiceArn" --output text)
           docker run --rm \
             -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \
             -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
