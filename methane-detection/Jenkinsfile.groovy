@@ -346,7 +346,7 @@ pipeline {
       }
     }
 
- stage('Create / Recreate App Runner service') {
+stage('Create / Recreate App Runner service') {
   steps {
     echo '==================== 🧭 APP RUNNER SERVICE ================='
     sh '''
@@ -398,8 +398,11 @@ pipeline {
           -e SECRET_OPENEO="${SECRET_OPENEO}" \
           -e SECRET_COPERNI="${SECRET_COPERNI}" \
           -e AUTO_DEPLOY="${AUTO_DEPLOY}" \
-          ${AWSCLI_IMAGE} sh -lc '
+          ${AWSCLI_IMAGE} bash -lc '
             set -e
+            aws --version
+            aws apprunner help >/dev/null
+
             cat >/tmp/src.json <<JSON
 {
   "ImageRepository": {
@@ -462,8 +465,11 @@ JSON
           -e SECRET_OPENEO="${SECRET_OPENEO}" \
           -e SECRET_COPERNI="${SECRET_COPERNI}" \
           -e AUTO_DEPLOY="${AUTO_DEPLOY}" \
-          ${AWSCLI_IMAGE} sh -lc '
+          ${AWSCLI_IMAGE} bash -lc '
             set -e
+            aws --version
+            aws apprunner help >/dev/null
+
             cat >/tmp/src.json <<JSON
 {
   "ImageRepository": {
@@ -519,6 +525,7 @@ JSON
     '''
   }
 }
+
 
     stage('Optional manual rollout (if AUTO_DEPLOY=false)') {
       when { expression { return params.FORCE_ROLLOUT && !params.AUTO_DEPLOY } }
