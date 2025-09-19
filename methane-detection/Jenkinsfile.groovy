@@ -23,14 +23,11 @@ pipeline {
     // Optional: only if you plan to force rollout with auto-deploy disabled
     // APPRUNNER_SERVICE_ARN = credentials('APPRUNNER_SERVICE_ARN')
 
-    // Build ergonomics
-    DOCKER_BUILDKIT = '1'
-
-    // AWS CLI image
+    // AWS CLI container
     AWSCLI_IMAGE = 'amazon/aws-cli:latest'
 
-    // Optional corporate CA bundle (Secret file). If you create it, uncomment this line:
-    // AWS_CA_BUNDLE = credentials('AWS_CA_BUNDLE_PEM')
+    // Do NOT force BuildKit globally (we’ll decide at build time)
+    // DOCKER_BUILDKIT = '1'
   }
 
   options {
@@ -71,6 +68,12 @@ pipeline {
           set -e
           echo "[docker] version:"
           docker version
+          echo "[docker buildx] check:"
+          if docker buildx version >/dev/null 2>&1; then
+            echo "✅ buildx present"
+          else
+            echo "ℹ️  buildx NOT installed; will use classic builder"
+          fi
         '''
       }
     }
@@ -102,13 +105,11 @@ pipeline {
         echo '==================== 🔐 ECR LOGIN =========================='
         sh '''
           set -e
-          # Build optional CA flag
           EXTRA_CA=""
           if [ -n "${AWS_CA_BUNDLE:-}" ]; then
             EXTRA_CA="-e AWS_CA_BUNDLE=${AWS_CA_BUNDLE}"
           fi
 
-          # Get ECR password with containerized awscli, then login host docker
           docker run --rm \
             -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
             -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
@@ -125,6 +126,15 @@ pipeline {
         echo '==================== 🧱 DOCKER BUILD ======================='
         sh '''
           set -e
+          # Decide BuildKit dynamically
+          if docker buildx version >/dev/null 2>&1; then
+            echo "🔧 Using BuildKit (buildx detected)"
+            export DOCKER_BUILDKIT=1
+          else
+            echo "🔧 Using classic builder (no buildx)"
+            export DOCKER_BUILDKIT=0
+          fi
+
           echo "Building ${IMAGE_REPO_NAME}:${UNIQUE_TAG} and :latest from ./${APP_DIR}"
           docker build -f "${APP_DIR}/Dockerfile" -t "${IMAGE_REPO_NAME}:${UNIQUE_TAG}" -t "${IMAGE_REPO_NAME}:latest" "${APP_DIR}"
         '''
