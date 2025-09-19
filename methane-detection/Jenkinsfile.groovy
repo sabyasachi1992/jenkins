@@ -15,19 +15,22 @@ pipeline {
     // -------- AWS / ECR --------
     AWS_ACCESS_KEY_ID     = credentials('AWS_ACCESS_KEY_ID')
     AWS_SECRET_ACCESS_KEY = credentials('AWS_SECRET_ACCESS_KEY')
-    AWS_DEFAULT_REGION    = credentials('AWS_DEFAULT_REGION')   // ap-south-1
+    AWS_DEFAULT_REGION    = credentials('AWS_DEFAULT_REGION')   // e.g., ap-south-1
     AWS_ACCOUNT_ID        = '194722403970'
     IMAGE_REPO_NAME       = 'methane-tracker'
     REPO_URI              = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}"
 
-    // (Optional) Only needed if you plan to force rollout when auto-deploy is disabled
+    // Optional: only if you plan to force rollout with auto-deploy disabled
     // APPRUNNER_SERVICE_ARN = credentials('APPRUNNER_SERVICE_ARN')
 
     // Build ergonomics
     DOCKER_BUILDKIT = '1'
 
-    // AWS CLI Docker image
-    AWSCLI_IMAGE = 'amazon/aws-cli:2'
+    // Use a valid AWS CLI image tag
+    AWSCLI_IMAGE = 'amazon/aws-cli:latest'
+    // If your corp SSL MITM causes issues, you can set a Jenkins "Secret file" credential
+    // for your root CA and map it to AWS_CA_BUNDLE, then uncomment the pass-through lines below.
+    // AWS_CA_BUNDLE = credentials('AWS_CA_BUNDLE_PEM')
   }
 
   options {
@@ -67,8 +70,17 @@ pipeline {
         sh '''
           set -e
           echo "[docker] version:"
-          docker version || (echo "Docker missing on agent"; exit 1)
-          echo "[awscli] version (via container):"
+          docker version
+        '''
+      }
+    }
+
+    stage('Pull AWS CLI image') {
+      steps {
+        echo '==================== ⬇️  PULL AWS CLI ======================='
+        sh '''
+          set -e
+          docker pull ${AWSCLI_IMAGE}
           docker run --rm ${AWSCLI_IMAGE} --version
         '''
       }
@@ -90,11 +102,13 @@ pipeline {
         echo '==================== 🔐 ECR LOGIN =========================='
         sh '''
           set -e
-          # Get ECR password using the AWS CLI container and pipe into host docker login
+          # If you have a corp CA bundle, uncomment the env export and the extra -e flag:
+          # export AWS_CA_BUNDLE="${AWS_CA_BUNDLE}"
           docker run --rm \
             -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
             -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
             -e AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION}" \
+            # -e AWS_CA_BUNDLE="${AWS_CA_BUNDLE}" \
             ${AWSCLI_IMAGE} ecr get-login-password --region "${AWS_DEFAULT_REGION}" \
           | docker login --username AWS --password-stdin "${REPO_URI}"
         '''
@@ -135,8 +149,6 @@ pipeline {
             echo "APPRUNNER_SERVICE_ARN not configured; skipping manual rollout."
             exit 0
           fi
-
-          # Use awscli container for the rollout too
           docker run --rm \
             -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
             -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
@@ -154,7 +166,7 @@ pipeline {
     }
     success {
       echo "✅ Built & pushed: ${REPO_URI}:${UNIQUE_TAG} and :latest"
-      echo "ℹ️  With App Runner AutoDeployments ON, rollout happens automatically."
+      echo "ℹ️ With App Runner AutoDeployments ON, rollout happens automatically."
     }
     failure {
       echo "❌ Pipeline failed. Check stage logs above."
