@@ -346,119 +346,179 @@ pipeline {
       }
     }
 
-    stage('Create / Recreate App Runner service') {
-      steps {
-        echo '==================== 🧭 APP RUNNER SERVICE ================='
-        sh '''
-          set -e
-          WORKDIR="$PWD"
-          IMG="${REPO_URI}:latest"
+ stage('Create / Recreate App Runner service') {
+  steps {
+    echo '==================== 🧭 APP RUNNER SERVICE ================='
+    sh '''
+      set -e
+      IMG="${REPO_URI}:latest"
 
-          # Resolve role ARNs
-          ECR_ROLE_ARN=$(docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} iam get-role --role-name ${ECR_ROLE_NAME} --query 'Role.Arn' --output text)
-          RT_ROLE_ARN=$( docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} iam get-role --role-name ${RT_ROLE_NAME}  --query 'Role.Arn' --output text)
+      # Resolve role ARNs (host side)
+      ECR_ROLE_ARN=$(docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} iam get-role --role-name ${ECR_ROLE_NAME} --query 'Role.Arn' --output text)
+      RT_ROLE_ARN=$( docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} iam get-role --role-name ${RT_ROLE_NAME}  --query 'Role.Arn' --output text)
 
-          echo "[Roles]"
-          echo "ECR role: $ECR_ROLE_ARN"
-          echo "RT  role: $RT_ROLE_ARN"
+      echo "[Roles]"
+      echo "ECR role: $ECR_ROLE_ARN"
+      echo "RT  role: $RT_ROLE_ARN"
 
-          # Find existing service ARN
-          SVC_ARN=$(docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} apprunner list-services --query "ServiceSummaryList[?ServiceName=='${SERVICE_NAME}'].ServiceArn" --output text || true)
+      # Find existing service (host side)
+      SVC_ARN=$(docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} apprunner list-services --query "ServiceSummaryList[?ServiceName=='${SERVICE_NAME}'].ServiceArn" --output text || true)
 
-          if [ -n "$SVC_ARN" ] && [ "${RECREATE_SERVICE}" = "true" ]; then
-            echo "🔴 Deleting existing service ${SERVICE_NAME} ($SVC_ARN)"
-            docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} apprunner delete-service --service-arn "$SVC_ARN" >/dev/null
+      if [ -n "$SVC_ARN" ] && [ "${RECREATE_SERVICE}" = "true" ]; then
+        echo "🔴 Deleting existing service ${SERVICE_NAME} ($SVC_ARN)"
+        docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} apprunner delete-service --service-arn "$SVC_ARN" >/dev/null
 
-            echo "⏳ Waiting for deletion to complete..."
-            for i in $(seq 1 60); do
-              sleep 10
-              CUR=$(docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} apprunner list-services --query "ServiceSummaryList[?ServiceName=='${SERVICE_NAME}'].ServiceArn" --output text || true)
-              [ -z "$CUR" ] && break
-              echo "  still deleting..."
-            done
-            echo "✅ Old service removed (or not found)."
-            SVC_ARN=""
-          fi
+        echo "⏳ Waiting for deletion to complete..."
+        for i in $(seq 1 60); do
+          sleep 10
+          CUR=$(docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} apprunner list-services --query "ServiceSummaryList[?ServiceName=='${SERVICE_NAME}'].ServiceArn" --output text || true)
+          [ -z "$CUR" ] && break
+          echo "  still deleting..."
+        done
+        echo "✅ Old service removed (or not found)."
+        SVC_ARN=""
+      fi
 
-          # Prepare JSON files for source & instance configuration
-          SRC_JSON="$WORKDIR/src.json"
-          INST_JSON="$WORKDIR/inst.json"
-
-          cat > "$SRC_JSON" <<JSON
+      if [ -z "$SVC_ARN" ]; then
+        echo "🟢 Creating new App Runner service: ${SERVICE_NAME}"
+        docker run --rm \
+          -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
+          -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
+          -e AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION}" \
+          -e AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID}" \
+          -e SERVICE_NAME="${SERVICE_NAME}" \
+          -e IMG="${IMG}" \
+          -e ECR_ROLE_ARN="${ECR_ROLE_ARN}" \
+          -e RT_ROLE_ARN="${RT_ROLE_ARN}" \
+          -e ENTRY_FILE_PARAM="${ENTRY_FILE_PARAM}" \
+          -e EE_PROJECT_PARAM="${EE_PROJECT_PARAM}" \
+          -e OPENEO_EMAIL_PARAM="${OPENEO_EMAIL_PARAM}" \
+          -e COPERNICUS_USER_PARAM="${COPERNICUS_USER_PARAM}" \
+          -e SECRET_GOOGLE="${SECRET_GOOGLE}" \
+          -e SECRET_OPENEO="${SECRET_OPENEO}" \
+          -e SECRET_COPERNI="${SECRET_COPERNI}" \
+          -e AUTO_DEPLOY="${AUTO_DEPLOY}" \
+          ${AWSCLI_IMAGE} sh -lc '
+            set -e
+            cat >/tmp/src.json <<JSON
 {
   "ImageRepository": {
-    "ImageIdentifier": "${IMG}",
+    "ImageIdentifier": "'"${IMG}"'",
     "ImageRepositoryType": "ECR",
     "ImageConfiguration": {
       "Port": "8080",
       "RuntimeEnvironmentVariables": [
-        { "Name": "ENTRY_FILE",          "Value": "${ENTRY_FILE_PARAM}" },
-        { "Name": "EE_PROJECT",          "Value": "${EE_PROJECT_PARAM}" },
-        { "Name": "OPENEO_EMAIL",        "Value": "${OPENEO_EMAIL_PARAM}" },
-        { "Name": "COPERNICUS_USERNAME", "Value": "${COPERNICUS_USER_PARAM}" }
+        { "Name": "ENTRY_FILE",          "Value": "'"${ENTRY_FILE_PARAM}"'" },
+        { "Name": "EE_PROJECT",          "Value": "'"${EE_PROJECT_PARAM}"'" },
+        { "Name": "OPENEO_EMAIL",        "Value": "'"${OPENEO_EMAIL_PARAM}"'" },
+        { "Name": "COPERNICUS_USERNAME", "Value": "'"${COPERNICUS_USER_PARAM}"'" }
       ],
       "RuntimeEnvironmentSecrets": [
-        { "Name": "GOOGLE_CREDENTIALS",  "Value": "arn:aws:secretsmanager:${AWS_DEFAULT_REGION}:${AWS_ACCOUNT_ID}:secret:${SECRET_GOOGLE}" },
-        { "Name": "OPENEO_PASSWORD",     "Value": "arn:aws:secretsmanager:${AWS_DEFAULT_REGION}:${AWS_ACCOUNT_ID}:secret:${SECRET_OPENEO}" },
-        { "Name": "COPERNICUS_PASSWORD", "Value": "arn:aws:secretsmanager:${AWS_DEFAULT_REGION}:${AWS_ACCOUNT_ID}:secret:${SECRET_COPERNI}" }
+        { "Name": "GOOGLE_CREDENTIALS",  "Value": "arn:aws:secretsmanager:'"${AWS_DEFAULT_REGION}"':'"${AWS_ACCOUNT_ID}"':secret:'"${SECRET_GOOGLE}"'" },
+        { "Name": "OPENEO_PASSWORD",     "Value": "arn:aws:secretsmanager:'"${AWS_DEFAULT_REGION}"':'"${AWS_ACCOUNT_ID}"':secret:'"${SECRET_OPENEO}"'" },
+        { "Name": "COPERNICUS_PASSWORD", "Value": "arn:aws:secretsmanager:'"${AWS_DEFAULT_REGION}"':'"${AWS_ACCOUNT_ID}"':secret:'"${SECRET_COPERNI}"'" }
       ]
     }
   },
   "AuthenticationConfiguration": {
-    "AccessRoleArn": "${ECR_ROLE_ARN}"
+    "AccessRoleArn": "'"${ECR_ROLE_ARN}"'"
   },
-  "AutoDeploymentsEnabled": ${AUTO_DEPLOY}
+  "AutoDeploymentsEnabled": '"${AUTO_DEPLOY}"'
 }
 JSON
 
-          cat > "$INST_JSON" <<JSON
+            cat >/tmp/inst.json <<JSON
 {
   "Cpu": "1 vCPU",
   "Memory": "2 GB",
-  "InstanceRoleArn": "${RT_ROLE_ARN}"
+  "InstanceRoleArn": "'"${RT_ROLE_ARN}"'"
 }
 JSON
 
-          if [ -z "$SVC_ARN" ]; then
-            echo "🟢 Creating new App Runner service: ${SERVICE_NAME}"
-            docker run --rm \
-              -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \
-              -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
-              -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} \
-              -v "$WORKDIR":"$WORKDIR" -w "$WORKDIR" \
-              ${AWSCLI_IMAGE} apprunner create-service \
-              --service-name "${SERVICE_NAME}" \
-              --source-configuration file://"$SRC_JSON" \
-              --instance-configuration file://"$INST_JSON" >/dev/null
-
-            SVC_ARN=$(docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} apprunner list-services --query "ServiceSummaryList[?ServiceName=='${SERVICE_NAME}'].ServiceArn" --output text)
-          else
-            echo "🟡 Service exists. Updating image/config..."
-            # Toggle auto-deploy flag in source JSON already; use update-service
-            docker run --rm \
-              -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \
-              -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
-              -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} \
-              -v "$WORKDIR":"$WORKDIR" -w "$WORKDIR" \
-              ${AWSCLI_IMAGE} apprunner update-service \
-              --service-arn "$SVC_ARN" \
-              --source-configuration file://"$SRC_JSON" \
-              --instance-configuration file://"$INST_JSON" >/dev/null
-          fi
-
-          echo "⏳ Waiting until service is RUNNING..."
-          for i in $(seq 1 60); do
-            STATUS=$(docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} apprunner describe-service --service-arn "$SVC_ARN" --query "Service.Status" --output text || true)
-            echo "  status: $STATUS"
-            [ "$STATUS" = "RUNNING" ] && break
-            sleep 10
-          done
-
-          URL=$(docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} apprunner describe-service --service-arn "$SVC_ARN" --query "Service.ServiceUrl" --output text || true)
-          echo "✅ Service URL: $URL"
-        '''
-      }
+            aws apprunner create-service \
+              --service-name "'"${SERVICE_NAME}"'" \
+              --source-configuration file:///tmp/src.json \
+              --instance-configuration file:///tmp/inst.json
+          '
+        # Capture ARN after creation (host side)
+        SVC_ARN=$(docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} apprunner list-services --query "ServiceSummaryList[?ServiceName=='${SERVICE_NAME}'].ServiceArn" --output text)
+      else
+        echo "🟡 Service exists. Updating image/config..."
+        docker run --rm \
+          -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
+          -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
+          -e AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION}" \
+          -e AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID}" \
+          -e SERVICE_NAME="${SERVICE_NAME}" \
+          -e SVC_ARN="${SVC_ARN}" \
+          -e IMG="${IMG}" \
+          -e ECR_ROLE_ARN="${ECR_ROLE_ARN}" \
+          -e RT_ROLE_ARN="${RT_ROLE_ARN}" \
+          -e ENTRY_FILE_PARAM="${ENTRY_FILE_PARAM}" \
+          -e EE_PROJECT_PARAM="${EE_PROJECT_PARAM}" \
+          -e OPENEO_EMAIL_PARAM="${OPENEO_EMAIL_PARAM}" \
+          -e COPERNICUS_USER_PARAM="${COPERNICUS_USER_PARAM}" \
+          -e SECRET_GOOGLE="${SECRET_GOOGLE}" \
+          -e SECRET_OPENEO="${SECRET_OPENEO}" \
+          -e SECRET_COPERNI="${SECRET_COPERNI}" \
+          -e AUTO_DEPLOY="${AUTO_DEPLOY}" \
+          ${AWSCLI_IMAGE} sh -lc '
+            set -e
+            cat >/tmp/src.json <<JSON
+{
+  "ImageRepository": {
+    "ImageIdentifier": "'"${IMG}"'",
+    "ImageRepositoryType": "ECR",
+    "ImageConfiguration": {
+      "Port": "8080",
+      "RuntimeEnvironmentVariables": [
+        { "Name": "ENTRY_FILE",          "Value": "'"${ENTRY_FILE_PARAM}"'" },
+        { "Name": "EE_PROJECT",          "Value": "'"${EE_PROJECT_PARAM}"'" },
+        { "Name": "OPENEO_EMAIL",        "Value": "'"${OPENEO_EMAIL_PARAM}"'" },
+        { "Name": "COPERNICUS_USERNAME", "Value": "'"${COPERNICUS_USER_PARAM}"'" }
+      ],
+      "RuntimeEnvironmentSecrets": [
+        { "Name": "GOOGLE_CREDENTIALS",  "Value": "arn:aws:secretsmanager:'"${AWS_DEFAULT_REGION}"':'"${AWS_ACCOUNT_ID}"':secret:'"${SECRET_GOOGLE}"'" },
+        { "Name": "OPENEO_PASSWORD",     "Value": "arn:aws:secretsmanager:'"${AWS_DEFAULT_REGION}"':'"${AWS_ACCOUNT_ID}"':secret:'"${SECRET_OPENEO}"'" },
+        { "Name": "COPERNICUS_PASSWORD", "Value": "arn:aws:secretsmanager:'"${AWS_DEFAULT_REGION}"':'"${AWS_ACCOUNT_ID}"':secret:'"${SECRET_COPERNI}"'" }
+      ]
     }
+  },
+  "AuthenticationConfiguration": {
+    "AccessRoleArn": "'"${ECR_ROLE_ARN}"'"
+  },
+  "AutoDeploymentsEnabled": '"${AUTO_DEPLOY}"'
+}
+JSON
+
+            cat >/tmp/inst.json <<JSON
+{
+  "Cpu": "1 vCPU",
+  "Memory": "2 GB",
+  "InstanceRoleArn": "'"${RT_ROLE_ARN}"'"
+}
+JSON
+
+            aws apprunner update-service \
+              --service-arn "'"${SVC_ARN}"'" \
+              --source-configuration file:///tmp/src.json \
+              --instance-configuration file:///tmp/inst.json
+          '
+      fi
+
+      echo "⏳ Waiting until service is RUNNING..."
+      for i in $(seq 1 60); do
+        STATUS=$(docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} apprunner describe-service --service-arn "$SVC_ARN" --query "Service.Status" --output text || true)
+        echo "  status: $STATUS"
+        [ "$STATUS" = "RUNNING" ] && break
+        sleep 10
+      done
+
+      URL=$(docker run --rm -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} ${AWSCLI_IMAGE} apprunner describe-service --service-arn "$SVC_ARN" --query "Service.ServiceUrl" --output text || true)
+      echo "✅ Service URL: $URL"
+    '''
+  }
+}
 
     stage('Optional manual rollout (if AUTO_DEPLOY=false)') {
       when { expression { return params.FORCE_ROLLOUT && !params.AUTO_DEPLOY } }
