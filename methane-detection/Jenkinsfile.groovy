@@ -204,7 +204,7 @@ pipeline {
     string(name: 'SERVICE_NAME', defaultValue: 'methane-tracker-v2', description: 'App Runner service name to create/update')
     booleanParam(name: 'RECREATE_SERVICE', defaultValue: true, description: 'Delete existing service with the same name before creating a new one')
     booleanParam(name: 'AUTO_DEPLOY', defaultValue: true, description: 'Enable App Runner AutoDeployments from ECR')
-    string(name: 'ENTRY_FILE', defaultValue: 'scientific_methane_app.py', description: 'Streamlit entry file (or enhanced_scientific_methane_app.py)')
+    string(name: 'ENTRY_FILE', defaultValue: 'flask_app.py', description: 'Streamlit entry file')
     string(name: 'EE_PROJECT', defaultValue: '', description: 'EE project (env var for app)')
     string(name: 'OPENEO_EMAIL', defaultValue: '', description: 'OpenEO username/email')
     string(name: 'COPERNICUS_USERNAME', defaultValue: '', description: 'Copernicus username')
