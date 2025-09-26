@@ -214,7 +214,7 @@ pipeline {
 
   environment {
     CODE_REPO_URL = 'https://github.com/sabyasachi1992/methane-detection.git'
-    CODE_BRANCH   = 'main'
+    CODE_BRANCH   = 'dev'
     APP_DIR       = 'methane-detection'
 
     AWS_ACCESS_KEY_ID     = credentials('AWS_ACCESS_KEY_ID')
